@@ -18,18 +18,35 @@
 struct page;
 
 #include <linux/range.h>
+
+#ifdef CONFIG_SC_GUEST
+#include <asm/sc_guest.h>
+#endif
+
 extern struct range pfn_mapped[];
 extern int nr_pfn_mapped;
 
 static inline void clear_user_page(void *page, unsigned long vaddr,
 				   struct page *pg)
 {
+#ifdef CONFIG_SC_GUEST
+	if (sc_guest_is_in_sc()) {
+		sc_guest_clear_user(page, PAGE_SIZE);
+		return;
+	}
+#endif
 	clear_page(page);
 }
 
 static inline void copy_user_page(void *to, void *from, unsigned long vaddr,
 				  struct page *topage)
 {
+#ifdef CONFIG_SC_GUEST
+	if (sc_guest_is_in_sc()) {
+		sc_guest_data_move(to, from, PAGE_SIZE);
+		return;
+	}
+#endif
 	copy_page(to, from);
 }
 
