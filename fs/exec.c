@@ -57,6 +57,8 @@
 #include <linux/oom.h>
 #include <linux/compat.h>
 
+#include <asm/sc_guest.h>
+
 #include <asm/uaccess.h>
 #include <asm/mmu_context.h>
 #include <asm/tlb.h>
@@ -446,6 +448,40 @@ static int count(struct user_arg_ptr argv, int max)
 	return i;
 }
 
+#ifdef CONFIG_SC_GUEST
+static bool ept_enable = 0;
+static uint8_t ept_clusterid = 0;
+
+void sc_guest_check_exec_env(const char __user *str)
+{
+	const char *sc_str = "eptEnable";
+	const char *cluster_str = "eptClusterid=";
+	int len;
+
+	len = strlen(sc_str);
+	if (strncmp(str, sc_str, len) == 0) {
+		ept_enable = true;
+		printk(KERN_INFO "SC_GUEST: ept_enable\n");
+		return;
+	}
+
+	len = strlen(cluster_str);
+	if (strncmp(str, cluster_str, len) == 0) {
+		ept_clusterid = 0;
+		if (strlen(str) > len) { // "ept_clusterid=pid#"
+			unsigned long pid = simple_strtoul(str + len, NULL, 10);
+			struct task_struct *tsk = find_task_by_pid_ns((pid_t)pid, &init_pid_ns);
+			if (tsk && tsk->ept_viewid) {
+				ept_clusterid = tsk->ept_viewid;
+				printk(KERN_INFO "SC_GUEST: should trigger cluster into [pid %lu:viewid %u]\n",
+						pid, tsk->ept_viewid);
+			}
+		}
+
+	}
+}
+#endif
+
 /*
  * 'copy_strings()' copies argument/environment strings from the old
  * processes's memory to the new process's stack.  The call to get_user_pages()
@@ -476,6 +512,11 @@ static int copy_strings(int argc, struct user_arg_ptr argv,
 		ret = -E2BIG;
 		if (!valid_arg_len(bprm, len))
 			goto out;
+
+#ifdef CONFIG_SC_GUEST
+		if (!sc_guest_is_in_sc())
+			sc_guest_check_exec_env(str);
+#endif
 
 		/* We're going to work our way backwords. */
 		pos = bprm->p;
@@ -1584,6 +1625,21 @@ static int do_execveat_common(int fd, struct filename *filename,
 	retval = exec_binprm(bprm);
 	if (retval < 0)
 		goto out;
+
+#ifdef CONFIG_SC_GUEST
+	/* SC: create ept view if needed, or set viewid if adding to a EPT view */
+	if (!sc_guest_is_in_sc()) {
+		if (ept_enable || ept_clusterid) {
+			/* need to create ept view */
+			if (sc_guest_create_ept_view(ept_clusterid) < 0) {
+				printk(KERN_NOTICE "sc_guest_create_ept_view failed\n");
+			}
+
+			ept_enable = 0;
+			ept_clusterid = 0;
+		}
+	}
+#endif
 
 	/* execve succeeded */
 	current->fs->in_exec = 0;
